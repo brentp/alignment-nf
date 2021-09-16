@@ -30,5 +30,9 @@ RUN ln -s /opt/conda/pkgs/bwakit-0.7.15-1/share/bwakit-0.7.15-1/k8 /usr/local/bi
 RUN wget -q https://github.com/bwa-mem2/bwa-mem2/releases/download/v2.2.1/bwa-mem2-${bwa_mem2_version}_x64-linux.tar.bz2 && \
     tar jxf bwa-mem2-${bwa_mem2_version}_x64-linux.tar.bz2 && \
     mv bwa-mem2-${bwa_mem2_version}_x64-linux/* /usr/local/bin/. && \
-    rm -rf bwa-mem2-${bwa_mem2_version}
+    rm -rf bwa-mem2-${bwa_mem2_version} && \
+    wget -qO /usr/local/bin/tiwih https://github.com/brentp/tiwih/releases/download/v0.1.6/tiwih && \
+    chmod +x /usr/local/bin/tiwih
+
+
 ENV PATH /opt/conda/envs/alignment-nf/bin:$PATH
