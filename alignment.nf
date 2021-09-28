@@ -158,8 +158,6 @@ known_snps_index   = file( params.snp_vcf+'.tbi' )
 known_indels       = file( params.indel_vcf )
 known_indels_index = file( params.indel_vcf+'.tbi' )
 
-//qualimap feature file
-qualimap_ff = file(params.feature_file)
 
 mode = 'fastq'
 if(params.input_file){
@@ -194,11 +192,11 @@ if(mode=='bam'){
     memory params.mem+'G'
     tag { file_tag }
         
-    if(!params.recalibration) publishDir "${params.output_folder}/BAM/", mode: 'copy'
+    if(!params.recalibration) publishDir "${params.output_folder}/BAM/" 
 
-	input:
+  input:
   file infile from files
-	file ref
+  file ref
   file ref_sa
   file ref_bwt
   file ref_ann
@@ -207,10 +205,10 @@ if(mode=='bam'){
   file ref_0123
   file ref_bwt8bit
   file ref_alt 
-	file postaltjs
+  file postaltjs
      
   output:
-	set val(file_tag), file("${file_tag_new}*.bam"), file("${file_tag_new}*.bai")  into bam_bai_files
+  set val(file_tag), file("*.cram"), file("*.crai")  into bam_bai_files
 
   shell:
 	file_tag = infile.baseName
@@ -237,12 +235,19 @@ if(mode=='bam'){
 	   bwa_opt='-M '
  	   samblaster_opt='-M '
 	}
-	bwa_threads  = [params.cpu.intdiv(2) - 1,1].max()
-	sort_threads = [params.cpu.intdiv(2) - 1,1].max()
-	sort_mem     = params.mem.div(4)
+	bwa_threads  = [params.cpu - 1,1].max()
+	sort_threads = [params.cpu - 1,1].min()
+	sort_mem     = 2
 	'''
-  set -o pipefail
-  samtools collate -uOn 128 !{file_tag}.bam tmp_!{file_tag} | samtools fastq - | !{preproc} !{params.bwa_mem} !{ignorealt} !{bwa_opt} -t!{bwa_threads} -R "@RG\\tID:!{file_tag}\\tSM:!{file_tag}\\t!{params.RG}" -p !{ref} - | !{postalt} samblaster !{samblaster_opt} --addMateTags --ignoreUnmated | sambamba view -S -f bam -l 0 /dev/stdin | sambamba sort -t !{sort_threads} -m !{sort_mem}G --tmpdir=!{file_tag}_tmp -o !{file_tag_new}.bam /dev/stdin
+  set -euo pipefail
+  file_tag=$(tiwih samplename !{file_tag}.bam)
+  echo "TMPDIR:$TMPDIR"
+  samtools collate -fuO !{file_tag}.bam $TMPDIR/tmp_!{file_tag} \
+      | samtools fastq - \
+      | !{preproc} !{params.bwa_mem} !{ignorealt} !{bwa_opt} -t!{bwa_threads} -R "@RG\\tID:${file_tag}\\tSM:${file_tag}\\t!{params.RG}" -p !{ref} - \
+      | !{postalt} samblaster !{samblaster_opt} --addMateTags --ignoreUnmated \
+      | samtools sort -T $TMPDIR --threads !{sort_threads} -m !{sort_mem}G --reference !{ref} --output-fmt CRAM -o ${file_tag}.cram 
+  samtools index -@ 4 ${file_tag}.cram
   '''
   }
 }
@@ -275,7 +280,7 @@ if(mode!='bam'){
 
   shell:
 	file_tag_new=file_tag 
-	bwa_threads  = [params.cpu.intdiv(2) - 1,1].max()
+	bwa_threads  = [params.cpu.intdiv(2) + 1,1].max()
   sort_threads = [params.cpu.intdiv(2) - 1,1].max()
   sort_mem     = [params.mem.intdiv(4),1].max()
   file_tag_new=file_tag_new+"${read_group}"
@@ -334,10 +339,8 @@ if(mode!='bam'){
 
 	    input:
 	    set val(file_tag), val(nb_groups), val(read_group),  file(bam), file(bai) from mult2QC
-	    file qff from qualimap_ff
 
 	    output:
-	    file ("${file_name}") into qualimap_multi_results
 	    file ("${file_name}.stats.txt") into flagstat_multi_results
 
 	    shell:
@@ -345,8 +348,7 @@ if(mode!='bam'){
       file_name = bam.baseName
 	    '''
 	    sambamba sort -t !{params.cpu} -m !{params.mem}G --tmpdir=!{file_name}_tmp -o !{file_name}_COsorted.bam !{bam}
-	    qualimap bamqc -nt !{params.cpu} !{feature} --skip-duplicated -bam !{file_name}_COsorted.bam --java-mem-size=!{params.mem}G -outdir !{file_name} -outformat html
-	    sambamba flagstat -t !{params.cpu} !{bam} > !{file_name}.stats.txt
+	    samtools flagstat --threads !{params.cpu} !{bam} > !{file_name}.stats.txt
 	    '''
 	}
 
@@ -396,7 +398,7 @@ if(mode!='bam'){
       if(params.trim) file_tag_new=file_tag_new+'_trimmed'
       if(params.alt)  file_tag_new=file_tag_new+'_alt'	
       if(nb_groups>1){
-         merge_threads  = [params.cpu.intdiv(2) - 1,1].max()
+         merge_threads  = [params.cpu.intdiv(2) + 1,1].max()
 	      sort_threads = [params.cpu.intdiv(2) - 1,1].max()
         sort_mem     = params.mem.div(2)
 	      bam_files=" "
@@ -478,18 +480,14 @@ process qualimap_final {
 
     input:
     set val(file_tag), file(bam), file(bai) from final_bam_bai_files
-    file qff from qualimap_ff
 
     output:
-    file ("${file_name}") into qualimap_results
     file ("${file_name}.stats.txt") into flagstat_results
 
     shell:
-    feature = qff.name != 'NO_FILE' ? "--feature-file $qff" : ''
     file_name=bam.baseName
     '''
-    qualimap bamqc -nt !{params.cpu} !{feature} --skip-duplicated -bam !{bam} --java-mem-size=!{params.mem}G -outdir !{file_name} -outformat html
-    sambamba flagstat -t !{params.cpu} !{bam} > !{file_name}.stats.txt
+    samtools flagstat --threads !{params.cpu} !{bam} > !{file_name}.stats.txt
     '''
 }
 
@@ -500,7 +498,6 @@ process multiqc_final {
     publishDir "${params.output_folder}/QC/BAM/", mode: 'copy'
 
     input:
-    file qualimap_results from qualimap_results.collect()
     file flagstat_results from flagstat_results.collect()
     file BQSR_results from recal_table_files.collect()
     file multiqc_config from ch_config_for_multiqc
